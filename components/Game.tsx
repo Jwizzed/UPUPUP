@@ -36,7 +36,27 @@ interface Platform {
   zone?: ZoneType;
 }
 
+interface Enemy {
+  id: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  vx: number;
+  type: 'flying' | 'static';
+}
+
+interface Bullet {
+  id: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  radius: number;
+}
+
 type ZoneType = 'normal' | 'ice' | 'wind' | 'low-g';
+type DifficultyType = 'easy' | 'hard' | 'hell';
 
 interface Particle {
   x: number;
@@ -57,6 +77,7 @@ export default function Game() {
   const [frenzyActive, setFrenzyActive] = useState(false);
   const [currentZone, setCurrentZone] = useState<ZoneType>('normal');
   const [combo, setCombo] = useState(0);
+  const [difficulty, setDifficulty] = useState<DifficultyType>('easy');
 
   // Refs for game logic to avoid closure/re-render issues
   const scoreRef = useRef(0);
@@ -68,6 +89,16 @@ export default function Game() {
   const voidSpeedRef = useRef(VOID_INITIAL_SPEED);
   const zoneTypeRef = useRef<ZoneType>('normal');
   const windForceRef = useRef(0);
+  const difficultyRef = useRef<DifficultyType>('easy');
+
+  // Difficulty Config Helpers
+  const getDifficultyParams = () => {
+    switch (difficultyRef.current) {
+      case 'hell': return { widthMult: 0.4, voidSpeedMult: 3.5, enemyChanceMult: 5.0, gapMult: 1.5, scoreDiv: 2000, speedMult: 2.0 };
+      case 'hard': return { widthMult: 0.9, voidSpeedMult: 1.0, enemyChanceMult: 1.0, gapMult: 1.1, scoreDiv: 8000, speedMult: 1.2 };
+      case 'easy': default: return { widthMult: 1.2, voidSpeedMult: 0.5, enemyChanceMult: 0.2, gapMult: 0.9, scoreDiv: 12000, speedMult: 0.8 };
+    }
+  };
 
   // Game state refs (to avoid closure issues in loop)
   const playerRef = useRef({
@@ -83,10 +114,14 @@ export default function Game() {
   });
 
   const platformsRef = useRef<Platform[]>([]);
+  const enemiesRef = useRef<Enemy[]>([]);
+  const bulletsRef = useRef<Bullet[]>([]);
   const particlesRef = useRef<Particle[]>([]);
   const cameraYRef = useRef(0);
   const keysRef = useRef<{ [key: string]: boolean }>({});
   const lastPlatformIdRef = useRef(0);
+  const lastEnemyIdRef = useRef(0);
+  const lastBulletIdRef = useRef(0);
   const lastLandedPlatformIdRef = useRef<number>(-1);
   const jumpForceRef = useRef(INITIAL_JUMP_FORCE);
   const platformGapRef = useRef(INITIAL_PLATFORM_GAP);
@@ -94,22 +129,26 @@ export default function Game() {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('upupup_highscore');
+      const saved = localStorage.getItem(`upupup_highscore_${difficulty}`);
       if (saved) {
         const parsed = parseInt(saved);
         if (!isNaN(parsed)) {
-          setTimeout(() => setHighScore(parsed), 0);
+          setHighScore(parsed);
           highScoreRef.current = parsed;
         }
+      } else {
+        setHighScore(0);
+        highScoreRef.current = 0;
       }
     }
-  }, []);
+  }, [difficulty]);
 
   const spawnPlatform = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const lastPlatform = platformsRef.current[platformsRef.current.length - 1];
+    const diffParams = getDifficultyParams();
     
     // Use the projected score based on the platform's Y coordinate to avoid generating unreachable platforms
     // when the player's zone changes mid-air
@@ -125,8 +164,8 @@ export default function Game() {
     
     const createPlatformAt = (offsetX: number, lane: 'safe' | 'risky') => {
       // Difficulty Settings based on Score
-      let pWidth = PLATFORM_WIDTH;
-      let pGap = INITIAL_PLATFORM_GAP;
+      let pWidth = PLATFORM_WIDTH * diffParams.widthMult;
+      let pGap = INITIAL_PLATFORM_GAP * diffParams.gapMult;
       let type: Platform['type'] = 'static';
       let multiplier = 1;
       
@@ -137,15 +176,14 @@ export default function Game() {
       }
 
       if (platformScore < 500) {
-        pWidth = PLATFORM_WIDTH;
-        pGap = INITIAL_PLATFORM_GAP;
+        // keep bases
       } else if (platformScore < 1500) {
         pWidth *= 0.9;
-        pGap = INITIAL_PLATFORM_GAP * 1.1;
+        pGap *= 1.1;
         if (Math.random() < 0.4 && lane === 'safe') type = 'moving';
       } else {
         pWidth *= 0.7;
-        pGap = Math.min(MAX_PLATFORM_GAP, INITIAL_PLATFORM_GAP * 1.3);
+        pGap = Math.min(MAX_PLATFORM_GAP * diffParams.gapMult, pGap * 1.3);
       }
       
       // Scaling gap for low-g (since height is lower there)
@@ -163,7 +201,7 @@ export default function Game() {
         id: ++lastPlatformIdRef.current,
         type,
         direction: Math.random() < 0.5 ? 1 : -1,
-        speed: 1 + Math.random() * 2 + (platformScore / 5000),
+        speed: (1 + Math.random() * 2 + (platformScore / diffParams.scoreDiv)) * diffParams.speedMult,
         multiplier,
         lane,
         zone: spawnZone
@@ -175,8 +213,27 @@ export default function Game() {
       const p2 = createPlatformAt(canvas.width / 2 + Math.random() * (canvas.width / 2 - 50), 'risky');
       platformsRef.current.push(p1 as Platform, p2 as Platform);
     } else {
-      const p = createPlatformAt(Math.random() * (canvas.width - PLATFORM_WIDTH), 'safe');
+      const p = createPlatformAt(Math.random() * (canvas.width - (PLATFORM_WIDTH * diffParams.widthMult)), 'safe');
       platformsRef.current.push(p as Platform);
+    }
+
+    // Occasionally spawn an enemy between platforms if score is high enough
+    if (platformScore > 800 && Math.random() < diffParams.enemyChanceMult * (0.15 + (platformScore / 30000))) {
+      const enemyY = lastPlatform.y - (INITIAL_PLATFORM_GAP * diffParams.gapMult) * 0.45;
+      const t: Enemy['type'] = Math.random() > 0.5 ? 'flying' : 'static';
+      // Don't spawn them off boundaries
+      const eW = 28;
+      const eH = 28;
+      const maxW = canvas.width - eW;
+      enemiesRef.current.push({
+        id: ++lastEnemyIdRef.current,
+        x: Math.random() * maxW,
+        y: enemyY,
+        width: eW,
+        height: eH,
+        type: t,
+        vx: t === 'flying' ? ((Math.random() > 0.5 ? 2.5 : -2.5) + (platformScore / 5000)) * diffParams.speedMult : 0,
+      });
     }
   }, []);
 
@@ -226,6 +283,12 @@ export default function Game() {
       { x: canvas.width / 2 - 60, y: canvas.height - 50, width: 120, id: 0, type: 'static', zone: 'normal' },
     ];
     lastPlatformIdRef.current = 0;
+    
+    enemiesRef.current = [];
+    lastEnemyIdRef.current = 0;
+    
+    bulletsRef.current = [];
+    lastBulletIdRef.current = 0;
     
     // Generate some starting platforms
     for (let i = 1; i < 10; i++) {
@@ -317,7 +380,8 @@ export default function Game() {
     player.y += player.vy;
 
     // Rising Void Logic
-    voidSpeedRef.current = VOID_INITIAL_SPEED + (scoreRef.current / 10000);
+    const diffParams = getDifficultyParams();
+    voidSpeedRef.current = (VOID_INITIAL_SPEED * diffParams.voidSpeedMult) + (scoreRef.current / Math.max(1000, diffParams.scoreDiv));
     voidYRef.current -= voidSpeedRef.current;
 
     // Squash and stretch logic
@@ -382,7 +446,7 @@ export default function Game() {
               comboRef.current += 1;
               setCombo(comboRef.current);
               // Trigger Frenzy
-              if (comboRef.current >= 10) {
+              if (comboRef.current >= 15) {
                 frenzyTimerRef.current = FRENZY_DURATION;
                 setFrenzyActive(true);
                 comboRef.current = 0;
@@ -395,6 +459,10 @@ export default function Game() {
               setCombo(0);
             }
             lastLandedPlatformIdRef.current = platform.id;
+          } else {
+            // Landing on the same platform again breaks combo
+            comboRef.current = 0;
+            setCombo(0);
           }
 
           // Start crumbling
@@ -411,6 +479,80 @@ export default function Game() {
         return Date.now() - p.crumbleStartTime <= 500;
       }
       return true;
+    });
+
+    // Update and Check Enemies
+    enemiesRef.current.forEach(enemy => {
+      if (enemy.type === 'flying') {
+        enemy.x += enemy.vx;
+        if (enemy.x <= 0 || enemy.x + enemy.width >= canvas.width) {
+          enemy.vx *= -1;
+          enemy.x = Math.max(0, Math.min(enemy.x, canvas.width - enemy.width));
+        }
+      }
+
+      // Check Collision AABB
+      if (
+        player.x < enemy.x + enemy.width &&
+        player.x + player.width > enemy.x &&
+        player.y < enemy.y + enemy.height &&
+        player.y + player.height > enemy.y
+      ) {
+        if (frenzyTimerRef.current > 0) {
+          // Destroy enemy in frenzy
+          enemy.y += 9999;
+          createDust(enemy.x + enemy.width / 2, enemy.y);
+          playJumpSound(); // Simple hit feedback
+        } else {
+          // Game Over 
+          setGameState('gameover');
+          playFallSound();
+          if (scoreRef.current > highScoreRef.current) {
+            highScoreRef.current = scoreRef.current;
+            setHighScore(scoreRef.current);
+            localStorage.setItem(`upupup_highscore_${difficultyRef.current}`, scoreRef.current.toString());
+          }
+        }
+      }
+    });
+
+    if (difficultyRef.current === 'hell') {
+      enemiesRef.current.forEach(enemy => {
+        // Chance to shoot downwards/diagonally towards player
+        if (Math.random() < 0.02) {
+          bulletsRef.current.push({
+            id: ++lastBulletIdRef.current,
+            x: enemy.x + enemy.width / 2,
+            y: enemy.y + enemy.height,
+            vx: (Math.random() - 0.5) * 4,
+            vy: 5 + Math.random() * 4, // Fast downward projection
+            radius: 5,
+          });
+        }
+      });
+    }
+
+    // Update and Check Bullets
+    bulletsRef.current.forEach(b => {
+      b.x += b.vx;
+      b.y += b.vy;
+
+      if (
+        player.x < b.x + b.radius &&
+        player.x + player.width > b.x - b.radius &&
+        player.y < b.y + b.radius &&
+        player.y + player.height > b.y - b.radius
+      ) {
+        if (frenzyTimerRef.current <= 0) {
+          setGameState('gameover');
+          playFallSound();
+          if (scoreRef.current > highScoreRef.current) {
+            highScoreRef.current = scoreRef.current;
+            setHighScore(scoreRef.current);
+            localStorage.setItem(`upupup_highscore_${difficultyRef.current}`, scoreRef.current.toString());
+          }
+        }
+      }
     });
 
     // Camera tracking
@@ -445,6 +587,12 @@ export default function Game() {
     // Remove old platforms
     platformsRef.current = platformsRef.current.filter(p => p.y < cameraYRef.current + canvas.height + 200);
 
+    // Remove old enemies
+    enemiesRef.current = enemiesRef.current.filter(e => e.y < cameraYRef.current + canvas.height + 200);
+
+    // Remove old bullets
+    bulletsRef.current = bulletsRef.current.filter(b => b.y < cameraYRef.current + canvas.height + 200 && b.y > cameraYRef.current - 500);
+
     // Update particles
     particlesRef.current.forEach(p => {
       p.x += p.vx;
@@ -460,7 +608,7 @@ export default function Game() {
       if (scoreRef.current > highScoreRef.current) {
         highScoreRef.current = scoreRef.current;
         setHighScore(scoreRef.current);
-        localStorage.setItem('upupup_highscore', scoreRef.current.toString());
+        localStorage.setItem(`upupup_highscore_${difficultyRef.current}`, scoreRef.current.toString());
       }
     }
   }, [gameState, spawnPlatform, createDust]);
@@ -476,21 +624,58 @@ export default function Game() {
 
     // Background Gradient based on Zone
     const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
-    if (currentZone === 'normal') {
+    const activeZone = zoneTypeRef.current;
+    if (activeZone === 'normal') {
       grad.addColorStop(0, '#0f172a'); // Slate 900
       grad.addColorStop(1, '#1e293b'); // Slate 800
-    } else if (currentZone === 'ice') {
+    } else if (activeZone === 'ice') {
       grad.addColorStop(0, '#0c4a6e'); // Sky 900
       grad.addColorStop(1, '#0ea5e9'); // Sky 500
-    } else if (currentZone === 'wind') {
+    } else if (activeZone === 'wind') {
       grad.addColorStop(0, '#14532d'); // Green 900
       grad.addColorStop(1, '#22c55e'); // Green 500
-    } else if (currentZone === 'low-g') {
+    } else if (activeZone === 'low-g') {
       grad.addColorStop(0, '#581c87'); // Purple 900
       grad.addColorStop(1, '#a855f7'); // Purple 500
     }
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Ambient background decorations based on Zone
+    const time = Date.now();
+    if (activeZone === 'ice') {
+      // Falling snow
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+      for (let i = 0; i < 30; i++) {
+        const snowY = (time * 0.05 + i * 40) % canvas.height;
+        const snowX = (i * 20 + Math.sin(time * 0.001 + i) * 20) % canvas.width;
+        ctx.beginPath();
+        ctx.arc(snowX, snowY, (i % 3) + 1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (activeZone === 'wind') {
+      // Wind streaks
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+      ctx.lineWidth = 1.5;
+      for (let i = 0; i < 20; i++) {
+        const windX = (time * 0.4 + i * 50) % (canvas.width + 100) - 50;
+        const windY = (i * 40) % canvas.height;
+        ctx.beginPath();
+        ctx.moveTo(windX, windY);
+        ctx.lineTo(windX + 30 + (i % 20), windY);
+        ctx.stroke();
+      }
+    } else if (activeZone === 'low-g') {
+      // Floating space stars
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+      for (let i = 0; i < 20; i++) {
+        const floatY = canvas.height - ((time * 0.02 + i * 50) % canvas.height);
+        const floatX = (i * 30 + Math.cos(time * 0.0005 + i) * 30) % canvas.width;
+        ctx.beginPath();
+        ctx.arc(floatX, floatY, (i % 4) + 1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
 
     // Grid lines for sense of movement
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
@@ -574,6 +759,92 @@ export default function Game() {
         ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
         ctx.fillRect(p.x, drawY, p.width, 2);
         
+        ctx.restore();
+      }
+    });
+
+    // Draw Enemies
+    enemiesRef.current.forEach(e => {
+      const drawY = e.y - camY;
+      if (drawY > -50 && drawY < canvas.height + 50) {
+        ctx.save();
+        
+        // Jitter for flying enemies
+        if (e.type === 'flying') {
+          ctx.translate(0, Math.sin(Date.now() * 0.01 + e.id) * 3);
+        }
+
+        // Body
+        ctx.fillStyle = '#ef4444'; // Red 500
+        ctx.beginPath();
+        const r = 6;
+        ctx.moveTo(e.x + r, drawY);
+        ctx.lineTo(e.x + e.width - r, drawY);
+        ctx.quadraticCurveTo(e.x + e.width, drawY, e.x + e.width, drawY + r);
+        ctx.lineTo(e.x + e.width, drawY + e.height - r);
+        ctx.quadraticCurveTo(e.x + e.width, drawY + e.height, e.x + e.width - r, drawY + e.height);
+        ctx.lineTo(e.x + r, drawY + e.height);
+        ctx.quadraticCurveTo(e.x, drawY + e.height, e.x, drawY + e.height - r);
+        ctx.lineTo(e.x, drawY + r);
+        ctx.quadraticCurveTo(e.x, drawY, e.x + r, drawY);
+        ctx.fill();
+
+        // Angry Eyes
+        ctx.fillStyle = '#fee2e2'; // Rose 100
+        const eyeW = 8;
+        const eyeH = 6;
+        
+        // Left eye
+        ctx.beginPath();
+        ctx.ellipse(e.x + 6, drawY + 10, eyeW/2, eyeH/2, Math.PI/6, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Right eye
+        ctx.beginPath();
+        ctx.ellipse(e.x + e.width - 6, drawY + 10, eyeW/2, eyeH/2, -Math.PI/6, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Pupils
+        ctx.fillStyle = 'black';
+        ctx.beginPath();
+        ctx.arc(e.x + 6, drawY + 10, 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(e.x + e.width - 6, drawY + 10, 2, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Spikes on top
+        ctx.fillStyle = '#b91c1c'; // Red 700
+        ctx.beginPath();
+        for(let i=0; i<3; i++) {
+          const spikeX = e.x + 4 + (i * 10);
+          ctx.moveTo(spikeX, drawY);
+          ctx.lineTo(spikeX + 4, drawY - 6);
+          ctx.lineTo(spikeX + 8, drawY);
+        }
+        ctx.fill();
+
+        ctx.restore();
+      }
+    });
+
+    // Draw Bullets
+    bulletsRef.current.forEach(b => {
+      const drawY = b.y - camY;
+      if (drawY > -50 && drawY < canvas.height + 50) {
+        ctx.save();
+        ctx.fillStyle = '#f97316'; // Orange 500
+        ctx.beginPath();
+        ctx.arc(b.x, drawY, b.radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowColor = '#ef4444';
+        ctx.shadowBlur = 10;
+        ctx.fill();
+        
+        ctx.fillStyle = '#fef08a'; // Yellow glow core
+        ctx.beginPath();
+        ctx.arc(b.x, drawY, b.radius / 2, 0, Math.PI * 2);
+        ctx.fill();
         ctx.restore();
       }
     });
@@ -750,6 +1021,7 @@ export default function Game() {
   }, [update, draw, gameState]);
 
   const startGame = () => {
+    difficultyRef.current = difficulty;
     initGame();
     setGameState('playing');
   };
@@ -797,11 +1069,18 @@ export default function Game() {
           <motion.div 
             initial={{ scale: 0.5, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            style={{ position: 'absolute', top: '100px', left: '50%', transform: 'translateX(-50%)', backgroundColor: 'rgba(234, 179, 8, 0.9)', color: 'white', padding: '12px 24px', borderRadius: '24px', textAlign: 'center', zIndex: 11 }}
-            className="absolute top-24 left-1/2 -translate-x-1/2 bg-yellow-500/90 text-white px-6 py-3 rounded-full text-center z-11 font-black"
+            style={{ position: 'absolute', top: '100px', left: '50%', transform: 'translateX(-50%)', backgroundColor: 'rgba(234, 179, 8, 0.9)', color: 'white', padding: '12px 24px', borderRadius: '24px', textAlign: 'center', minWidth: '140px', zIndex: 11, display: 'flex', flexDirection: 'column', alignItems: 'center' }}
+            className="absolute top-24 left-1/2 -translate-x-1/2 bg-yellow-500/90 text-white px-6 py-3 rounded-full text-center z-11 font-black flex flex-col items-center"
           >
-            <div className="text-xs uppercase opacity-80">COMBO</div>
+            <div className="text-xs uppercase opacity-80 mb-1">FRENZY COMBO</div>
             <div className="text-4xl">x{combo}</div>
+            <div style={{ width: '100%', height: '6px', backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: '4px', marginTop: '8px', overflow: 'hidden' }}>
+               <motion.div 
+                 style={{ height: '100%', backgroundColor: 'white' }} 
+                 animate={{ width: `${Math.min(100, (combo / 15) * 100)}%` }} 
+                 transition={{ type: 'spring', bounce: 0, duration: 0.3 }}
+               />
+            </div>
           </motion.div>
         )}
 
@@ -849,7 +1128,23 @@ export default function Game() {
               START JUMPING
             </button>
 
-            <div className="mt-8 text-center">
+            <div className="mt-8 text-center" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginBottom: '16px' }}>
+                {(['easy', 'hard', 'hell'] as DifficultyType[]).map((diff) => (
+                  <button
+                    key={diff}
+                    onClick={() => setDifficulty(diff)}
+                    style={{
+                      padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', cursor: 'pointer',
+                      backgroundColor: difficulty === diff ? (diff === 'easy' ? '#22c55e' : diff === 'hard' ? '#f97316' : '#e11d48') : 'transparent',
+                      color: difficulty === diff ? 'white' : '#94a3b8',
+                      border: `1px solid ${difficulty === diff ? 'transparent' : '#475569'}`,
+                    }}
+                  >
+                    {diff}
+                  </button>
+                ))}
+              </div>
               <span className="text-[10px] text-slate-500 uppercase tracking-widest block mb-2">Created By</span>
               <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px] text-slate-400 font-medium opacity-60">
                 <span>Nanthawat D.</span>
@@ -909,6 +1204,13 @@ export default function Game() {
                 >
                   <RotateCcw style={{ width: '24px', height: '24px' }} className="w-6 h-6" />
                   TRY AGAIN
+                </button>
+                <button 
+                  onClick={() => setGameState('start')}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', backgroundColor: 'transparent', color: '#94a3b8', padding: '16px 32px', borderRadius: '16px', fontWeight: 'bold', fontSize: '16px', cursor: 'pointer', border: '2px solid #475569', pointerEvents: 'auto' }}
+                  className="flex items-center justify-center gap-3 bg-transparent text-slate-400 border-2 border-slate-600 px-8 py-4 rounded-2xl font-bold text-base hover:bg-slate-800 transition-all active:scale-95 pointer-events-auto"
+                >
+                  MAIN MENU
                 </button>
               </div>
             </motion.div>

@@ -1,7 +1,3 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
-
 # Remix: UPUPUP
 
 **Remix: UPUPUP** is an endless vertical jumper arcade game built with Next.js, React, and TypeScript. Players jump endlessly upward on platforms, avoiding a rising "void" and enemies, while progressing through dynamic zones. The goal is simple: survive as long as possible and achieve the highest score.
@@ -41,7 +37,6 @@
 | [Lucide React](https://lucide.dev/) | latest | Iconography |
 | [canvas-confetti](https://github.com/catdad/canvas-confetti) | 1.9.4 | Celebration particle effects |
 | Custom Web Audio API | – | Procedural sound & music |
-| [@google/genai](https://github.com/google/genai) | 1.17.0 | Gemini API integration |
 
 ---
 

@@ -67,6 +67,15 @@ interface Particle {
   color: string;
 }
 
+interface FloatingText {
+  id: number;
+  x: number;
+  y: number;
+  text: string;
+  life: number;
+  color: string;
+}
+
 export default function Game() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -117,11 +126,13 @@ export default function Game() {
   const enemiesRef = useRef<Enemy[]>([]);
   const bulletsRef = useRef<Bullet[]>([]);
   const particlesRef = useRef<Particle[]>([]);
+  const floatingTextsRef = useRef<FloatingText[]>([]);
   const cameraYRef = useRef(0);
   const keysRef = useRef<{ [key: string]: boolean }>({});
   const lastPlatformIdRef = useRef(0);
   const lastEnemyIdRef = useRef(0);
   const lastBulletIdRef = useRef(0);
+  const lastFloatingTextIdRef = useRef(0);
   const lastLandedPlatformIdRef = useRef<number>(-1);
   const jumpForceRef = useRef(INITIAL_JUMP_FORCE);
   const platformGapRef = useRef(INITIAL_PLATFORM_GAP);
@@ -290,6 +301,9 @@ export default function Game() {
     bulletsRef.current = [];
     lastBulletIdRef.current = 0;
     
+    floatingTextsRef.current = [];
+    lastFloatingTextIdRef.current = 0;
+    
     // Generate some starting platforms
     for (let i = 1; i < 10; i++) {
       spawnPlatform();
@@ -443,8 +457,34 @@ export default function Game() {
           if (platform.id !== lastLandedPlatformIdRef.current) {
             // Only count combo if we are actually progressing upwards to a new platform
             if (platform.id > lastLandedPlatformIdRef.current) {
-              comboRef.current += 1;
-              setCombo(comboRef.current);
+              const playerCenter = player.x + player.width / 2;
+              const platformCenter = platform.x + platform.width / 2;
+              const dist = Math.abs(playerCenter - platformCenter);
+              
+              // "Perfect" is the center 10% of the platform (plus standard slack for player width)
+              // We'll consider perfect margin as 10% of platform width (5% each side) + player.width/2 padding
+              const perfectMargin = (platform.width * 0.10) + (player.width / 4);
+
+              if (dist < perfectMargin) {
+                // Perfect: x2 combo
+                comboRef.current = comboRef.current === 0 ? 2 : comboRef.current * 2;
+                setCombo(comboRef.current);
+                
+                // Show floating text
+                floatingTextsRef.current.push({
+                  id: ++lastFloatingTextIdRef.current,
+                  x: playerCenter,
+                  y: player.y - 20,
+                  text: 'PERFECT! x2',
+                  life: 1.0,
+                  color: '#eab308' // Yellow
+                });
+              } else {
+                // Normal landing
+                comboRef.current += 1;
+                setCombo(comboRef.current);
+              }
+
               // Trigger Frenzy
               if (comboRef.current >= 15) {
                 frenzyTimerRef.current = FRENZY_DURATION;
@@ -608,6 +648,13 @@ export default function Game() {
       p.life -= 0.02;
     });
     particlesRef.current = particlesRef.current.filter(p => p.life > 0);
+
+    // Update floating texts
+    floatingTextsRef.current.forEach(ft => {
+      ft.y -= 1.5; // Float up
+      ft.life -= 0.02; // Fade out
+    });
+    floatingTextsRef.current = floatingTextsRef.current.filter(ft => ft.life > 0);
 
     // Game Over check
     if (player.y > cameraYRef.current + canvas.height + 100 || player.y + player.height > voidYRef.current) {
@@ -897,6 +944,19 @@ export default function Game() {
       ctx.fill();
     });
     ctx.globalAlpha = 1;
+
+    // Draw Floating Texts
+    floatingTextsRef.current.forEach(ft => {
+      ctx.save();
+      ctx.fillStyle = ft.color;
+      ctx.globalAlpha = ft.life;
+      ctx.font = 'bold 24px "Press Start 2P", monospace';
+      ctx.textAlign = 'center';
+      ctx.shadowColor = 'black';
+      ctx.shadowBlur = 4;
+      ctx.fillText(ft.text, ft.x, ft.y - camY);
+      ctx.restore();
+    });
 
     // Draw Player
     const player = playerRef.current;

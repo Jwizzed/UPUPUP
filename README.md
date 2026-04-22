@@ -46,7 +46,6 @@
 
 - [Node.js](https://nodejs.org/) (LTS recommended)
 - npm (comes with Node.js)
-- A [Gemini API key](https://aistudio.google.com/app/apikey) for AI features
 
 ### Setup
 
@@ -59,11 +58,6 @@
    ```bash
    cp .env.example .env.local
    ```
-   Then open `.env.local` and set your Gemini API key:
-   ```env
-   GEMINI_API_KEY=your_api_key_here
-   ```
-
 3. **Run the development server**
    ```bash
    npm run dev

@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import confetti from 'canvas-confetti';
 import { Trophy, RotateCcw, Play, ArrowLeft, ArrowRight } from 'lucide-react';
-import { playJumpSound, playFallSound, playRecordSound } from '@/lib/sounds';
+import { playJumpSound, playFallSound, playRecordSound, playShootSound, playExplosionSound, playThemeMusic, stopThemeMusic } from '@/lib/sounds';
 
 // Constants
 const GRAVITY = 0.4;
@@ -502,11 +502,12 @@ export default function Game() {
           // Destroy enemy in frenzy
           enemy.y += 9999;
           createDust(enemy.x + enemy.width / 2, enemy.y);
-          playJumpSound(); // Simple hit feedback
+          playExplosionSound(); // Enemy explodes!
         } else {
           // Game Over 
           setGameState('gameover');
-          playFallSound();
+          stopThemeMusic();
+          playExplosionSound(); // Bomb sound when touched by enemy
           if (scoreRef.current > highScoreRef.current) {
             highScoreRef.current = scoreRef.current;
             setHighScore(scoreRef.current);
@@ -520,6 +521,12 @@ export default function Game() {
       enemiesRef.current.forEach(enemy => {
         // Chance to shoot downwards/diagonally towards player
         if (Math.random() < 0.02) {
+          const drawY = enemy.y - cameraYRef.current;
+          // Sync sound to visible screen constraint only
+          if (drawY > -50 && canvasRef.current && drawY < canvasRef.current.height + 50) {
+            playShootSound(); // Gunshot!
+          }
+          
           bulletsRef.current.push({
             id: ++lastBulletIdRef.current,
             x: enemy.x + enemy.width / 2,
@@ -545,7 +552,8 @@ export default function Game() {
       ) {
         if (frenzyTimerRef.current <= 0) {
           setGameState('gameover');
-          playFallSound();
+          stopThemeMusic();
+          playExplosionSound(); // Blew up by bullet!
           if (scoreRef.current > highScoreRef.current) {
             highScoreRef.current = scoreRef.current;
             setHighScore(scoreRef.current);
@@ -604,6 +612,7 @@ export default function Game() {
     // Game Over check
     if (player.y > cameraYRef.current + canvas.height + 100 || player.y + player.height > voidYRef.current) {
       setGameState('gameover');
+      stopThemeMusic();
       playFallSound();
       if (scoreRef.current > highScoreRef.current) {
         highScoreRef.current = scoreRef.current;
@@ -1024,6 +1033,7 @@ export default function Game() {
     difficultyRef.current = difficulty;
     initGame();
     setGameState('playing');
+    playThemeMusic(difficulty);
   };
 
   return (
